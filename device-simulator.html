@@ -1,0 +1,237 @@
+<script type="text/javascript">
+    RED.nodes.registerType('device-simulator', {
+        category: 'simulation',
+        color: '#27F555',
+        defaults: {
+            name:          { value: '' },
+            topic:         { value: '' },
+            template:      { value: '{}' },
+            fields:        { value: '[]' },
+            intervalMode:  { value: 'fixed' },
+            intervalFixed: { value: 5000 },
+            intervalMin:   { value: 1000 },
+            intervalMax:   { value: 10000 }
+        },
+        inputs: 0,
+        outputs: 1,
+        icon: 'energiam.png',
+        label: function () {
+            return this.name || 'device simulator';
+        },
+        labelStyle: function () {
+            return this.name ? 'node_label_italic' : '';
+        },
+
+        // --- Al abrir el editor ---
+        oneditprepare: function () {
+            const node = this;
+
+            // Mostrar/ocultar campos de intervalo según modo
+            function updateIntervalUI() {
+                const mode = $('#node-input-intervalMode').val();
+                if (mode === 'fixed') {
+                    $('#row-intervalFixed').show();
+                    $('#row-intervalMin').hide();
+                    $('#row-intervalMax').hide();
+                } else {
+                    $('#row-intervalFixed').hide();
+                    $('#row-intervalMin').show();
+                    $('#row-intervalMax').show();
+                }
+            }
+            $('#node-input-intervalMode').on('change', updateIntervalUI);
+            updateIntervalUI();
+
+            // --- Renderizar tabla de fields a partir del JSON guardado ---
+            function renderFields(fieldsArray) {
+                const tbody = $('#fields-tbody');
+                tbody.empty();
+                fieldsArray.forEach(function (f) {
+                    addFieldRow(f.key, f.enabled, f.min, f.max, f.triggerOnChange);
+                });
+            }
+
+            // --- Agregar una fila a la tabla de fields ---
+            function addFieldRow(key, enabled, min, max, triggerOnChange) {
+                const row = $('<tr>');
+
+                // Key (readonly — viene del JSON)
+                row.append($('<td>').text(key).css({ padding: '4px 6px', fontFamily: 'monospace', fontSize: '12px' }));
+
+                // Checkbox: variable
+                const chkEnabled = $('<input type="checkbox">').prop('checked', !!enabled);
+                row.append($('<td>').css('text-align', 'center').append(chkEnabled));
+
+                // Min
+                const inMin = $('<input type="number" step="any">').val(min != null ? min : '').css({ width: '70px' });
+                row.append($('<td>').append(inMin));
+
+                // Max
+                const inMax = $('<input type="number" step="any">').val(max != null ? max : '').css({ width: '70px' });
+                row.append($('<td>').append(inMax));
+
+                // Checkbox: dispara si cambia
+                const chkTrigger = $('<input type="checkbox">').prop('checked', !!triggerOnChange);
+                row.append($('<td>').css('text-align', 'center').append(chkTrigger));
+
+                // Guardar key en data para recuperarla al salvar
+                row.data('key', key);
+                row.data('chkEnabled', chkEnabled);
+                row.data('inMin', inMin);
+                row.data('inMax', inMax);
+                row.data('chkTrigger', chkTrigger);
+
+                $('#fields-tbody').append(row);
+            }
+
+            // --- Parsear el template JSON y regenerar la tabla ---
+            function parseTemplateAndRebuild() {
+                let obj = {};
+                try {
+                    obj = JSON.parse($('#node-input-template').val() || '{}');
+                } catch (e) {
+                    $('#template-error').text('JSON inválido').show();
+                    return;
+                }
+                $('#template-error').hide();
+
+                // Leer fields actuales para preservar configuración existente
+                const currentFields = collectFields();
+                const currentMap = {};
+                currentFields.forEach(function (f) { currentMap[f.key] = f; });
+
+                // Reconstruir con las claves del nuevo JSON
+                const newFields = [];
+                Object.keys(obj).forEach(function (key) {
+                    if (typeof obj[key] === 'number') {
+                        const existing = currentMap[key] || {};
+                        newFields.push({
+                            key: key,
+                            enabled: existing.enabled || false,
+                            min: existing.min != null ? existing.min : obj[key],
+                            max: existing.max != null ? existing.max : obj[key],
+                            triggerOnChange: existing.triggerOnChange || false
+                        });
+                    }
+                });
+
+                renderFields(newFields);
+            }
+
+            // --- Recolectar fields desde la tabla ---
+            function collectFields() {
+                const result = [];
+                $('#fields-tbody tr').each(function () {
+                    const row = $(this);
+                    result.push({
+                        key:             row.data('key'),
+                        enabled:         row.data('chkEnabled').prop('checked'),
+                        min:             parseFloat(row.data('inMin').val()),
+                        max:             parseFloat(row.data('inMax').val()),
+                        triggerOnChange: row.data('chkTrigger').prop('checked')
+                    });
+                });
+                return result;
+            }
+
+            // Botón para parsear template manualmente
+            $('#btn-parse-template').on('click', parseTemplateAndRebuild);
+
+            // Cargar fields guardados al abrir
+            let savedFields = [];
+            try { savedFields = JSON.parse(node.fields || '[]'); } catch (e) { savedFields = []; }
+            renderFields(savedFields);
+
+            // Exponer collectFields al scope del nodo para oneditsave
+            node._collectFields = collectFields;
+        },
+
+        // --- Al guardar ---
+        oneditsave: function () {
+            this.fields = JSON.stringify(this._collectFields());
+        },
+
+        // --- Al cancelar ---
+        oneditcancel: function () {}
+    });
+</script>
+
+<script type="text/html" data-template-name="device-simulator">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Nombre</label>
+        <input type="text" id="node-input-name" placeholder="device simulator">
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-topic"><i class="fa fa-envelope"></i> Topic</label>
+        <input type="text" id="node-input-topic" placeholder="zigbee2mqtt/sensor_01">
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label><i class="fa fa-code"></i> Template JSON</label>
+        <textarea id="node-input-template" rows="6"
+            style="width:100%; font-family:monospace; font-size:12px; border:1px solid #ccc; padding:6px; box-sizing:border-box;"
+            placeholder='{"voltage": 220.0, "current": 1.5, "power": 330.0}'></textarea>
+        <div id="template-error" style="color:red; font-size:11px; display:none;"></div>
+        <button id="btn-parse-template" class="red-ui-button" style="margin-top:6px;">
+            <i class="fa fa-refresh"></i> Actualizar campos desde JSON
+        </button>
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label><i class="fa fa-sliders"></i> Campos variables</label>
+        <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                <thead>
+                    <tr style="background:#f0f0f0;">
+                        <th style="padding:4px 6px; text-align:left;">Campo</th>
+                        <th style="padding:4px 6px;">Variable</th>
+                        <th style="padding:4px 6px;">Min</th>
+                        <th style="padding:4px 6px;">Max</th>
+                        <th style="padding:4px 6px;">Dispara si cambia</th>
+                    </tr>
+                </thead>
+                <tbody id="fields-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label for="node-input-intervalMode"><i class="fa fa-clock-o"></i> Intervalo</label>
+        <select id="node-input-intervalMode" style="width:auto;">
+            <option value="fixed">Fijo</option>
+            <option value="random">Aleatorio</option>
+        </select>
+    </div>
+
+    <div class="form-row" id="row-intervalFixed">
+        <label for="node-input-intervalFixed">Cada (ms)</label>
+        <input type="number" id="node-input-intervalFixed" min="100" style="width:120px;">
+    </div>
+
+    <div class="form-row" id="row-intervalMin">
+        <label for="node-input-intervalMin">Mín (ms)</label>
+        <input type="number" id="node-input-intervalMin" min="100" style="width:120px;">
+    </div>
+
+    <div class="form-row" id="row-intervalMax">
+        <label for="node-input-intervalMax">Máx (ms)</label>
+        <input type="number" id="node-input-intervalMax" min="100" style="width:120px;">
+    </div>
+</script>
+
+<script type="text/html" data-template-help="device-simulator">
+    <p>Simula dispositivos IoT (zigbee2mqtt, etc.) inyectando objetos JSON con campos variables.</p>
+    <ul>
+        <li>Pegá el JSON base en <b>Template JSON</b> y presioná <b>Actualizar campos</b>.</li>
+        <li>Marcá <b>Variable</b> en los campos numéricos que querés que varíen y definí su rango.</li>
+        <li>Marcá <b>Dispara si cambia</b> para que el mensaje solo se envíe cuando ese campo cambie de valor.</li>
+        <li>El intervalo puede ser fijo (ms) o aleatorio entre un mínimo y máximo.</li>
+    </ul>
+</script>
