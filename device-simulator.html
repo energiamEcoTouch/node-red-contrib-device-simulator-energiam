@@ -10,9 +10,10 @@
             intervalMode:  { value: 'fixed' },
             intervalFixed: { value: 5000 },
             intervalMin:   { value: 1000 },
-            intervalMax:   { value: 10000 }
+            intervalMax:   { value: 10000 },
+            startupDelay:  { value: 0 }
         },
-        inputs: 0,
+        inputs: 1,
         outputs: 1,
         icon: 'energiam.png',
         label: function () {
@@ -21,28 +22,57 @@
         labelStyle: function () {
             return this.name ? 'node_label_italic' : '';
         },
+        button: {
+            enabled: function () { return !this.changed; },
+            onclick: function () {
+                const node = this;
+                $.ajax({
+                    url: 'device-simulator/' + node.id + '/inject',
+                    type: 'POST',
+                    success: function () {
+                        RED.notify('Inyección manual enviada', { type: 'success', timeout: 1500 });
+                    },
+                    error: function () {
+                        RED.notify('Error al inyectar', { type: 'error', timeout: 2000 });
+                    }
+                });
+            }
+        },
 
-        // --- Al abrir el editor ---
         oneditprepare: function () {
             const node = this;
 
-            // Mostrar/ocultar campos de intervalo según modo
+            // ── Editor de template con modo maximizable (igual que nodo Template) ──
+            this.editor = RED.editor.createEditor({
+                id: 'node-input-template-editor',
+                mode: 'ace/mode/json',
+                value: $('#node-input-template').val() || '{}'
+            });
+
+            // ── Mostrar/ocultar campos de intervalo según modo ──
             function updateIntervalUI() {
                 const mode = $('#node-input-intervalMode').val();
                 if (mode === 'fixed') {
                     $('#row-intervalFixed').show();
-                    $('#row-intervalMin').hide();
-                    $('#row-intervalMax').hide();
+                    $('#row-intervalMin, #row-intervalMax').hide();
                 } else {
                     $('#row-intervalFixed').hide();
-                    $('#row-intervalMin').show();
-                    $('#row-intervalMax').show();
+                    $('#row-intervalMin, #row-intervalMax').show();
                 }
             }
             $('#node-input-intervalMode').on('change', updateIntervalUI);
             updateIntervalUI();
 
-            // --- Renderizar tabla de fields a partir del JSON guardado ---
+            // ── Secciones colapsables ──
+            $('.ds-section-header').on('click', function () {
+                const target = $(this).data('target');
+                const icon   = $(this).find('.ds-chevron');
+                $('#' + target).slideToggle(150, function () {
+                    icon.text($('#' + target).is(':visible') ? '▲' : '▼');
+                });
+            });
+
+            // ── Renderizar tabla de fields ──
             function renderFields(fieldsArray) {
                 const tbody = $('#fields-tbody');
                 tbody.empty();
@@ -51,30 +81,30 @@
                 });
             }
 
-            // --- Agregar una fila a la tabla de fields ---
             function addFieldRow(key, enabled, min, max, triggerOnChange) {
                 const row = $('<tr>');
 
-                // Key (readonly — viene del JSON)
-                row.append($('<td>').text(key).css({ padding: '4px 6px', fontFamily: 'monospace', fontSize: '12px' }));
+                row.append(
+                    $('<td>').text(key).css({
+                        padding: '4px 8px',
+                        fontFamily: 'monospace',
+                        fontSize: '12px',
+                        color: '#333'
+                    })
+                );
 
-                // Checkbox: variable
                 const chkEnabled = $('<input type="checkbox">').prop('checked', !!enabled);
                 row.append($('<td>').css('text-align', 'center').append(chkEnabled));
 
-                // Min
-                const inMin = $('<input type="number" step="any">').val(min != null ? min : '').css({ width: '70px' });
-                row.append($('<td>').append(inMin));
+                const inMin = $('<input type="number" step="any">').val(min != null ? min : '').css({ width: '68px' });
+                row.append($('<td>').css('padding', '3px 4px').append(inMin));
 
-                // Max
-                const inMax = $('<input type="number" step="any">').val(max != null ? max : '').css({ width: '70px' });
-                row.append($('<td>').append(inMax));
+                const inMax = $('<input type="number" step="any">').val(max != null ? max : '').css({ width: '68px' });
+                row.append($('<td>').css('padding', '3px 4px').append(inMax));
 
-                // Checkbox: dispara si cambia
                 const chkTrigger = $('<input type="checkbox">').prop('checked', !!triggerOnChange);
                 row.append($('<td>').css('text-align', 'center').append(chkTrigger));
 
-                // Guardar key en data para recuperarla al salvar
                 row.data('key', key);
                 row.data('chkEnabled', chkEnabled);
                 row.data('inMin', inMin);
@@ -84,41 +114,48 @@
                 $('#fields-tbody').append(row);
             }
 
-            // --- Parsear el template JSON y regenerar la tabla ---
+            // ── Parsear template y actualizar tabla preservando config existente ──
             function parseTemplateAndRebuild() {
                 let obj = {};
                 try {
-                    obj = JSON.parse($('#node-input-template').val() || '{}');
+                    const val = node.editor.getValue();
+                    obj = JSON.parse(val);
+                    $('#template-error').hide();
                 } catch (e) {
-                    $('#template-error').text('JSON inválido').show();
+                    $('#template-error').text('JSON inválido: ' + e.message).show();
                     return;
                 }
-                $('#template-error').hide();
 
-                // Leer fields actuales para preservar configuración existente
                 const currentFields = collectFields();
                 const currentMap = {};
                 currentFields.forEach(function (f) { currentMap[f.key] = f; });
 
-                // Reconstruir con las claves del nuevo JSON
                 const newFields = [];
                 Object.keys(obj).forEach(function (key) {
                     if (typeof obj[key] === 'number') {
                         const existing = currentMap[key] || {};
                         newFields.push({
-                            key: key,
-                            enabled: existing.enabled || false,
-                            min: existing.min != null ? existing.min : obj[key],
-                            max: existing.max != null ? existing.max : obj[key],
+                            key:             key,
+                            enabled:         existing.enabled  || false,
+                            min:             existing.min      != null ? existing.min : obj[key],
+                            max:             existing.max      != null ? existing.max : obj[key],
                             triggerOnChange: existing.triggerOnChange || false
                         });
                     }
                 });
 
                 renderFields(newFields);
+
+                // Expandir sección de campos si estaba colapsada
+                if (!$('#section-fields').is(':visible')) {
+                    $('#section-fields').slideDown(150);
+                    $('.ds-section-header[data-target="section-fields"] .ds-chevron').text('▲');
+                }
             }
 
-            // --- Recolectar fields desde la tabla ---
+            $('#btn-parse-template').on('click', parseTemplateAndRebuild);
+
+            // ── Recolectar fields desde la tabla ──
             function collectFields() {
                 const result = [];
                 $('#fields-tbody tr').each(function () {
@@ -134,65 +171,97 @@
                 return result;
             }
 
-            // Botón para parsear template manualmente
-            $('#btn-parse-template').on('click', parseTemplateAndRebuild);
-
-            // Cargar fields guardados al abrir
+            // Cargar fields guardados
             let savedFields = [];
             try { savedFields = JSON.parse(node.fields || '[]'); } catch (e) { savedFields = []; }
             renderFields(savedFields);
 
-            // Exponer collectFields al scope del nodo para oneditsave
             node._collectFields = collectFields;
         },
 
-        // --- Al guardar ---
         oneditsave: function () {
+            // Guardar valor del editor ACE en el input hidden
+            $('#node-input-template').val(this.editor.getValue());
+            this.editor.destroy();
+            delete this.editor;
             this.fields = JSON.stringify(this._collectFields());
         },
 
-        // --- Al cancelar ---
-        oneditcancel: function () {}
+        oneditcancel: function () {
+            if (this.editor) {
+                this.editor.destroy();
+                delete this.editor;
+            }
+        },
+
+        oneditresize: function (size) {
+            const rows     = $('#dialog-form>div:not(.node-input-template-row)');
+            let   rowsH    = 0;
+            rows.each(function () { rowsH += $(this).outerHeight(true); });
+            const editorH  = size.height - rowsH - 45;
+            this.editor.container.style.height = Math.max(editorH, 150) + 'px';
+            this.editor.resize();
+        }
     });
 </script>
 
 <script type="text/html" data-template-name="device-simulator">
+
+    <!-- Nombre -->
     <div class="form-row">
         <label for="node-input-name"><i class="fa fa-tag"></i> Nombre</label>
         <input type="text" id="node-input-name" placeholder="device simulator">
     </div>
 
+    <!-- Topic -->
     <div class="form-row">
         <label for="node-input-topic"><i class="fa fa-envelope"></i> Topic</label>
         <input type="text" id="node-input-topic" placeholder="zigbee2mqtt/sensor_01">
     </div>
 
-    <hr>
-
-    <div class="form-row">
-        <label><i class="fa fa-code"></i> Template JSON</label>
-        <textarea id="node-input-template" rows="6"
-            style="width:100%; font-family:monospace; font-size:12px; border:1px solid #ccc; padding:6px; box-sizing:border-box;"
-            placeholder='{"voltage": 220.0, "current": 1.5, "power": 330.0}'></textarea>
-        <div id="template-error" style="color:red; font-size:11px; display:none;"></div>
-        <button id="btn-parse-template" class="red-ui-button" style="margin-top:6px;">
-            <i class="fa fa-refresh"></i> Actualizar campos desde JSON
-        </button>
+    <!-- ── SECCIÓN: Template JSON ── -->
+    <div class="form-row ds-section-header" data-target="section-template"
+         style="cursor:pointer; background:#f0f0f0; padding:6px 10px;
+                border-radius:4px; margin-bottom:4px; user-select:none;">
+        <i class="fa fa-code" style="margin-right:6px;"></i>
+        <b>Template JSON</b>
+        <span class="ds-chevron" style="float:right;">▲</span>
+    </div>
+    <div id="section-template">
+        <div class="form-row node-input-template-row" style="position:relative;">
+            <!-- Input oculto para persistir el valor -->
+            <input type="hidden" id="node-input-template">
+            <div id="node-input-template-editor"
+                 style="width:100%; height:200px; min-height:150px;
+                        border:1px solid #ccc; border-radius:4px;"></div>
+            <div id="template-error"
+                 style="color:red; font-size:11px; margin-top:4px; display:none;"></div>
+        </div>
+        <div class="form-row">
+            <button id="btn-parse-template" class="red-ui-button" style="width:100%;">
+                <i class="fa fa-refresh"></i>&nbsp; Actualizar campos variables desde JSON
+            </button>
+        </div>
     </div>
 
-    <hr>
-
-    <div class="form-row">
-        <label><i class="fa fa-sliders"></i> Campos variables</label>
-        <div style="overflow-x:auto;">
+    <!-- ── SECCIÓN: Campos Variables ── -->
+    <div class="form-row ds-section-header" data-target="section-fields"
+         style="cursor:pointer; background:#f0f0f0; padding:6px 10px;
+                border-radius:4px; margin-bottom:4px; margin-top:8px; user-select:none;">
+        <i class="fa fa-sliders" style="margin-right:6px;"></i>
+        <b>Campos variables</b>
+        <span class="ds-chevron" style="float:right;">▲</span>
+    </div>
+    <div id="section-fields">
+        <div class="form-row" style="overflow-x:auto; margin-bottom:4px;">
             <table style="width:100%; border-collapse:collapse; font-size:12px;">
                 <thead>
-                    <tr style="background:#f0f0f0;">
-                        <th style="padding:4px 6px; text-align:left;">Campo</th>
-                        <th style="padding:4px 6px;">Variable</th>
-                        <th style="padding:4px 6px;">Min</th>
-                        <th style="padding:4px 6px;">Max</th>
-                        <th style="padding:4px 6px;">Dispara si cambia</th>
+                    <tr style="background:#1a1a2e; color:#fff;">
+                        <th style="padding:5px 8px; text-align:left;">Campo</th>
+                        <th style="padding:5px 8px;">Variable</th>
+                        <th style="padding:5px 8px;">Min</th>
+                        <th style="padding:5px 8px;">Max</th>
+                        <th style="padding:5px 8px;">Dispara si cambia</th>
                     </tr>
                 </thead>
                 <tbody id="fields-tbody"></tbody>
@@ -200,38 +269,60 @@
         </div>
     </div>
 
-    <hr>
-
-    <div class="form-row">
-        <label for="node-input-intervalMode"><i class="fa fa-clock-o"></i> Intervalo</label>
-        <select id="node-input-intervalMode" style="width:auto;">
-            <option value="fixed">Fijo</option>
-            <option value="random">Aleatorio</option>
-        </select>
+    <!-- ── SECCIÓN: Intervalo ── -->
+    <div class="form-row ds-section-header" data-target="section-interval"
+         style="cursor:pointer; background:#f0f0f0; padding:6px 10px;
+                border-radius:4px; margin-bottom:4px; margin-top:8px; user-select:none;">
+        <i class="fa fa-clock-o" style="margin-right:6px;"></i>
+        <b>Intervalo de inyección</b>
+        <span class="ds-chevron" style="float:right;">▲</span>
+    </div>
+    <div id="section-interval">
+        <div class="form-row">
+            <label for="node-input-intervalMode">Modo</label>
+            <select id="node-input-intervalMode" style="width:auto;">
+                <option value="fixed">Fijo</option>
+                <option value="random">Aleatorio</option>
+            </select>
+        </div>
+        <div class="form-row" id="row-intervalFixed">
+            <label for="node-input-intervalFixed">Cada (ms)</label>
+            <input type="number" id="node-input-intervalFixed" min="100" style="width:120px;">
+        </div>
+        <div class="form-row" id="row-intervalMin" style="display:none;">
+            <label for="node-input-intervalMin">Mín (ms)</label>
+            <input type="number" id="node-input-intervalMin" min="100" style="width:120px;">
+        </div>
+        <div class="form-row" id="row-intervalMax" style="display:none;">
+            <label for="node-input-intervalMax">Máx (ms)</label>
+            <input type="number" id="node-input-intervalMax" min="100" style="width:120px;">
+        </div>
+        <div class="form-row">
+            <label for="node-input-startupDelay">Delay inicio (ms)</label>
+            <input type="number" id="node-input-startupDelay" min="0" style="width:120px;"
+                   placeholder="0">
+            <span style="margin-left:8px; font-size:11px; color:#888;">
+                tiempo de espera antes del primer disparo tras deploy
+            </span>
+        </div>
     </div>
 
-    <div class="form-row" id="row-intervalFixed">
-        <label for="node-input-intervalFixed">Cada (ms)</label>
-        <input type="number" id="node-input-intervalFixed" min="100" style="width:120px;">
-    </div>
-
-    <div class="form-row" id="row-intervalMin">
-        <label for="node-input-intervalMin">Mín (ms)</label>
-        <input type="number" id="node-input-intervalMin" min="100" style="width:120px;">
-    </div>
-
-    <div class="form-row" id="row-intervalMax">
-        <label for="node-input-intervalMax">Máx (ms)</label>
-        <input type="number" id="node-input-intervalMax" min="100" style="width:120px;">
-    </div>
 </script>
 
-<script type="text/html" data-template-help="device-simulator">
-    <p>Simula dispositivos IoT (zigbee2mqtt, etc.) inyectando objetos JSON con campos variables.</p>
-    <ul>
-        <li>Pegá el JSON base en <b>Template JSON</b> y presioná <b>Actualizar campos</b>.</li>
-        <li>Marcá <b>Variable</b> en los campos numéricos que querés que varíen y definí su rango.</li>
-        <li>Marcá <b>Dispara si cambia</b> para que el mensaje solo se envíe cuando ese campo cambie de valor.</li>
-        <li>El intervalo puede ser fijo (ms) o aleatorio entre un mínimo y máximo.</li>
-    </ul>
+<script type="text/html" data-help-name="device-simulator">
+    <p>Simula dispositivos IoT (zigbee2mqtt, sensores, medidores) inyectando objetos JSON con campos variables.</p>
+    <h3>Uso</h3>
+    <ol>
+        <li>Pegá el JSON base en <b>Template JSON</b>.</li>
+        <li>Presioná <b>Actualizar campos variables desde JSON</b> para detectar los campos numéricos.</li>
+        <li>Marcá <b>Variable</b> en los campos que querés que varíen y definí su rango Min/Max.</li>
+        <li>Marcá <b>Dispara si cambia</b> para enviar el mensaje solo cuando ese campo cambia.</li>
+        <li>Configurá el intervalo fijo o aleatorio y el delay de inicio.</li>
+    </ol>
+    <h3>Entradas</h3>
+    <p>Cualquier mensaje recibido dispara una inyección inmediata, independientemente del timer.</p>
+    <h3>Salidas</h3>
+    <p>El nodo emite <code>msg.topic</code> y <code>msg.payload</code> con el objeto simulado.</p>
+    <h3>Botón</h3>
+    <p>El botón lateral en el canvas dispara una inyección manual sin necesidad de un nodo externo.</p>
 </script>

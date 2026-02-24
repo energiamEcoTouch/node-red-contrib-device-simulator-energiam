@@ -15,7 +15,6 @@ module.exports = function (RED) {
         }
 
         // --- Parsear configuración de campos variables ---
-        // config.fields: array de { key, enabled, min, max, triggerOnChange }
         let fields = [];
         try {
             fields = JSON.parse(config.fields || '[]');
@@ -24,18 +23,19 @@ module.exports = function (RED) {
             return;
         }
 
-        // Estado interno: última copia del objeto enviado
+        // Estado interno
         let lastPayload = JSON.parse(JSON.stringify(baseObject));
+        let timer = null;
+        let startupTimer = null;
 
-        // --- Función: generar valor aleatorio entre min y max ---
+        // --- Generar valor aleatorio entre min y max ---
         function randomBetween(min, max) {
             return Math.round((Math.random() * (max - min) + min) * 1000) / 1000;
         }
 
-        // --- Función: aplicar variaciones al objeto base ---
+        // --- Aplicar variaciones al objeto base ---
         function buildPayload() {
             const payload = JSON.parse(JSON.stringify(baseObject));
-
             for (const field of fields) {
                 if (!field.enabled) continue;
                 const min = parseFloat(field.min);
@@ -43,24 +43,20 @@ module.exports = function (RED) {
                 if (isNaN(min) || isNaN(max)) continue;
                 payload[field.key] = randomBetween(min, max);
             }
-
             return payload;
         }
 
-        // --- Función: decidir si hay que disparar ---
-        // Si ningún field tiene triggerOnChange, siempre dispara
-        // Si alguno tiene triggerOnChange, dispara solo si alguno de esos cambió
+        // --- Decidir si hay que disparar ---
         function shouldSend(newPayload) {
             const triggerFields = fields.filter(f => f.enabled && f.triggerOnChange);
             if (triggerFields.length === 0) return true;
-
             for (const field of triggerFields) {
                 if (newPayload[field.key] !== lastPayload[field.key]) return true;
             }
             return false;
         }
 
-        // --- Función: calcular intervalo ---
+        // --- Calcular intervalo ---
         function getInterval() {
             const mode = config.intervalMode || 'fixed';
             if (mode === 'fixed') {
@@ -72,61 +68,96 @@ module.exports = function (RED) {
             }
         }
 
-        // --- Loop de inyección ---
-        let timer = null;
+        // --- Emitir un mensaje ---
+        function doSend(source) {
+            const newPayload = buildPayload();
+            if (shouldSend(newPayload)) {
+                lastPayload = JSON.parse(JSON.stringify(newPayload));
+                node.send({
+                    topic: config.topic || '',
+                    payload: newPayload
+                });
+                node.status({
+                    fill: 'green',
+                    shape: 'dot',
+                    text: (source || 'enviado') + ' ' + new Date().toLocaleTimeString()
+                });
+            } else {
+                node.status({
+                    fill: 'grey',
+                    shape: 'ring',
+                    text: 'sin cambios ' + new Date().toLocaleTimeString()
+                });
+            }
+        }
 
+        // --- Loop de inyección automática ---
         function scheduleNext() {
             const interval = getInterval();
             timer = setTimeout(function () {
-                const newPayload = buildPayload();
-
-                if (shouldSend(newPayload)) {
-                    lastPayload = JSON.parse(JSON.stringify(newPayload));
-                    node.send({
-                        topic: config.topic || '',
-                        payload: newPayload
-                    });
-                    node.status({
-                        fill: 'green',
-                        shape: 'dot',
-                        text: 'enviado ' + new Date().toLocaleTimeString()
-                    });
-                } else {
-                    node.status({
-                        fill: 'grey',
-                        shape: 'ring',
-                        text: 'sin cambios ' + new Date().toLocaleTimeString()
-                    });
-                }
-
+                doSend('enviado');
                 scheduleNext();
             }, interval);
         }
 
-        // --- Arrancar ---
-        node.status({ fill: 'blue', shape: 'ring', text: 'iniciando...' });
-        scheduleNext();
+        // --- Limpiar timers ---
+        function clearTimers() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (startupTimer) { clearTimeout(startupTimer); startupTimer = null; }
+        }
 
-        // --- Limpiar timer al cerrar ---
-        node.on('close', function () {
-            if (timer) {
-                clearTimeout(timer);
-                timer = null;
+        // --- Arrancar con delay de inicio opcional ---
+        const startupDelay = parseInt(config.startupDelay) || 0;
+        node.status({ fill: 'blue', shape: 'ring', text: 'iniciando...' });
+
+        startupTimer = setTimeout(function () {
+            startupTimer = null;
+            scheduleNext();
+        }, startupDelay);
+
+        // --- Entrada: disparo externo por mensaje entrante ---
+        node.on('input', function (msg) {
+            doSend('input');
+        });
+
+        // --- Endpoint HTTP para disparo desde botón del editor ---
+        RED.httpAdmin.post(
+            '/device-simulator/:id/inject',
+            RED.auth.needsPermission('device-simulator.write'),
+            function (req, res) {
+                const n = RED.nodes.getNode(req.params.id);
+                if (n) {
+                    try {
+                        n.receive({});
+                        res.sendStatus(200);
+                    } catch (err) {
+                        res.sendStatus(500);
+                        n.error('Error en disparo manual: ' + err.toString());
+                    }
+                } else {
+                    res.sendStatus(404);
+                }
             }
+        );
+
+        // --- Limpiar al cerrar ---
+        node.on('close', function () {
+            clearTimers();
             node.status({});
         });
     }
 
     RED.nodes.registerType('device-simulator', DeviceSimulatorNode, {
         defaults: {
-            name:         { value: '' },
-            topic:        { value: '' },
-            template:     { value: '{}' },
-            fields:       { value: '[]' },
-            intervalMode: { value: 'fixed' },
-            intervalFixed:{ value: 5000 },
-            intervalMin:  { value: 1000 },
-            intervalMax:  { value: 10000 }
+            name:          { value: '' },
+            topic:         { value: '' },
+            template:      { value: '{}' },
+            fields:        { value: '[]' },
+            intervalMode:  { value: 'fixed' },
+            intervalFixed: { value: 5000 },
+            intervalMin:   { value: 1000 },
+            intervalMax:   { value: 10000 },
+            startupDelay:  { value: 0 }
         }
     });
 };
