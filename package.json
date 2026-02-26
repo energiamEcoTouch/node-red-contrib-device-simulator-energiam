@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-device-simulator-energiam",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Node-RED node to simulate IoT devices (e.g. zigbee2mqtt) injecting configurable JSON objects with variable fields and flexible trigger intervals",
   "keywords": [
     "node-red",

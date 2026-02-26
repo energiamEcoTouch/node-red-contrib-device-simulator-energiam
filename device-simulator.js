@@ -24,9 +24,10 @@ module.exports = function (RED) {
         }
 
         // Estado interno
-        let lastPayload = JSON.parse(JSON.stringify(baseObject));
-        let timer = null;
-        let startupTimer = null;
+        let lastPayload   = JSON.parse(JSON.stringify(baseObject));
+        let timer         = null;
+        let startupTimer  = null;
+        let debugActive   = config.debugActive === true;
 
         // --- Generar valor aleatorio entre min y max ---
         function randomBetween(min, max) {
@@ -73,10 +74,11 @@ module.exports = function (RED) {
             const newPayload = buildPayload();
             if (shouldSend(newPayload)) {
                 lastPayload = JSON.parse(JSON.stringify(newPayload));
-                node.send({
-                    topic: config.topic || '',
-                    payload: newPayload
-                });
+                const outMsg = { topic: config.topic || '', payload: newPayload };
+                node.send(outMsg);
+                if (debugActive) {
+                    node.debug(JSON.stringify(newPayload, null, 2));
+                }
                 node.status({
                     fill: 'green',
                     shape: 'dot',
@@ -140,6 +142,25 @@ module.exports = function (RED) {
             }
         );
 
+        // --- Endpoint HTTP para toggle debug ---
+        RED.httpAdmin.post(
+            '/device-simulator/:id/debug',
+            RED.auth.needsPermission('device-simulator.write'),
+            function (req, res) {
+                const n = RED.nodes.getNode(req.params.id);
+                if (n) {
+                    n._debugActive = !n._debugActive;
+                    debugActive = n._debugActive;
+                    res.json({ active: debugActive });
+                } else {
+                    res.sendStatus(404);
+                }
+            }
+        );
+
+        // Exponer estado debug para el frontend
+        node._debugActive = debugActive;
+
         // --- Limpiar al cerrar ---
         node.on('close', function () {
             clearTimers();
@@ -157,7 +178,8 @@ module.exports = function (RED) {
             intervalFixed: { value: 5000 },
             intervalMin:   { value: 1000 },
             intervalMax:   { value: 10000 },
-            startupDelay:  { value: 0 }
+            startupDelay:  { value: 0 },
+            debugActive:   { value: false }
         }
     });
 };

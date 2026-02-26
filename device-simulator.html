@@ -11,10 +11,13 @@
             intervalFixed: { value: 5000 },
             intervalMin:   { value: 1000 },
             intervalMax:   { value: 10000 },
-            startupDelay:  { value: 0 }
+            startupDelay:  { value: 0 },
+            debugActive:   { value: false }
         },
         inputs: 1,
         outputs: 1,
+        outputLabels: ['payload'],
+        _debugActive: false,
         icon: 'energiam.png',
         label: function () {
             return this.name || 'device simulator';
@@ -22,6 +25,8 @@
         labelStyle: function () {
             return this.name ? 'node_label_italic' : '';
         },
+        // Botón debug en la salida del nodo (cuadrado verde/gris)
+        // Se implementa via el área de label con click handler en oneditprepare
         button: {
             enabled: function () { return !this.changed; },
             onclick: function () {
@@ -48,6 +53,41 @@
                 mode: 'ace/mode/json',
                 value: $('#node-input-template').val() || '{}'
             });
+
+            // ── Toggle debug activo/inactivo (persiste en config) ──
+            function updateDebugButton(active) {
+                const btn = $('#btn-debug-toggle');
+                if (active) {
+                    btn.css({ background: '#27F555', color: '#fff', borderColor: '#1db844' });
+                    btn.attr('title', 'Debug activo — click para desactivar');
+                } else {
+                    btn.css({ background: '#aaa', color: '#fff', borderColor: '#888' });
+                    btn.attr('title', 'Debug inactivo — click para activar');
+                }
+            }
+
+            // Estado inicial
+            let debugActive = node.debugActive === true;
+            updateDebugButton(debugActive);
+
+            $('#btn-debug-toggle').on('click', function () {
+                debugActive = !debugActive;
+                updateDebugButton(debugActive);
+                // Si el nodo ya está desplegado, togglear en caliente
+                if (node.id) {
+                    $.ajax({
+                        url: 'device-simulator/' + node.id + '/debug',
+                        type: 'POST',
+                        success: function (data) {
+                            debugActive = data.active;
+                            updateDebugButton(debugActive);
+                        }
+                    });
+                }
+            });
+
+            // Exponer para oneditsave
+            node._getDebugActive = function () { return debugActive; };
 
             // ── Botón maximizar editor (igual que nodo Template nativo) ──
             $('#btn-expand-editor').on('click', function () {
@@ -194,7 +234,8 @@
             $('#node-input-template').val(this.editor.getValue());
             this.editor.destroy();
             delete this.editor;
-            this.fields = JSON.stringify(this._collectFields());
+            this.fields       = JSON.stringify(this._collectFields());
+            this.debugActive  = this._getDebugActive ? this._getDebugActive() : false;
         },
 
         oneditcancel: function () {
@@ -227,6 +268,21 @@
     <div class="form-row">
         <label for="node-input-topic"><i class="fa fa-envelope"></i> Topic</label>
         <input type="text" id="node-input-topic" placeholder="zigbee2mqtt/sensor_01">
+    </div>
+
+    <!-- Botón debug -->
+    <div class="form-row" style="display:flex; align-items:center; gap:10px;">
+        <label style="margin:0;">
+            <i class="fa fa-bug"></i> Debug
+        </label>
+        <button id="btn-debug-toggle" type="button"
+                style="border-radius:4px; border:1px solid #888; padding:4px 14px;
+                       font-size:12px; cursor:pointer; font-weight:bold; transition:all 0.2s;">
+            ◼ Panel debug
+        </button>
+        <span style="font-size:11px; color:#888;">
+            Envía el payload al panel de debug de Node-RED
+        </span>
     </div>
 
     <!-- ── SECCIÓN: Template JSON ── -->
